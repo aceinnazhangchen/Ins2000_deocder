@@ -1087,7 +1087,7 @@ void decode_ins2000_bin() {
 					//printf("%04d %03d %d\n", header.message_id, raw.buffer_len, readcount);
 				}
 				else {
-					printf("%d Error\n", header.message_id);
+					printf("%d Error len=%d,crc=[%u:%u]\r\n", header.message_id, raw.buffer_len, read_crc, cal_crc);
 				}
 				memset(&raw, 0, sizeof(raw));
 				memset(&header, 0, sizeof(header));
