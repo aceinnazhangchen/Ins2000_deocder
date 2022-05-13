@@ -117,11 +117,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="ins2000.c" />
-    <ClCompile Include="main.c" />
+    <ClCompile Include="ins2000.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="time_conversion.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ins2000.h" />
+    <ClInclude Include="time_conversion.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

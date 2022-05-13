@@ -1,11 +1,29 @@
 #include <stdio.h>
-#include"ins2000.h"
+#include <string.h>
+#include "ins2000.h"
 
 #define READ_CACHE_SIZE 4*1024
+#define READ_LINE_SIZE 1024
 
 int main(int argc, char* argv[]) {
 	if (argc > 1) {
 		char* filename = argv[1];
+		char* split_filename = NULL;
+		init();
+		if (argc > 3) {
+			char* opt = argv[2];
+			if (strcmp(opt, "-s") == 0) {
+				split_filename = argv[3];
+				FILE* split_file = fopen(split_filename, "r");
+				if (split_file) {
+					while (!feof(split_file)) {
+						char line[READ_LINE_SIZE] = { 0 };
+						fgets(line, READ_LINE_SIZE, split_file);
+						append_split_config(line);
+					}
+				}
+			}
+		}
 		printf("Decode : %s \n", argv[1]);
 		FILE* file = fopen(filename, "rb");
 		if (file) {
@@ -15,6 +33,7 @@ int main(int argc, char* argv[]) {
 			int  readcount = 0, i = 0, num = 0, step = 0,size_step = size / 100;
 			double percent = 0.0;
 			set_ins200_file_basename(filename);
+			open_log_file();
 			char read_cache[READ_CACHE_SIZE] = { 0 };
 			while (!feof(file)) {
 				readcount = fread(read_cache, sizeof(char), READ_CACHE_SIZE, file);

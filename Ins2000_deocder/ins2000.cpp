@@ -6,10 +6,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include<time.h>
+#include <time.h>
+#include <map>
+#include <string>
+#include <vector>
+#include "time_conversion.h"
 
-#define MAX_BUFF_LEN 2048
-#define LIMIT_BUFF_LEN	6
+using namespace std;
+
+#define LIMIT_BUFF_LEN	3
 #define SYNC_HEADER_LEN 3
 #define NMEA_HEADER_LEN 6
 #define NEMA_TYPES_NUM	9
@@ -17,10 +22,34 @@
 #define CRC32_POLYNOMIAL 0xEDB88320L;
 #define FILE_NAME_FLAF ""
 
+insconfig_t ins_config = { 0 };
+insconfig_translation_t translations[3] = { 0 };
+insconfig_rotation_t  rotations[2] = { 0 };
+std::vector<time_split_t>  time_split_vec;
+
 enum {
 	emBuffer_Type_Bin = 1,
 	emBuffer_Type_Ascii = 2,
 };
+
+FILE* log_file = NULL;
+FILE* nmea_file = NULL;
+FILE* imu_file = NULL;
+FILE* ins_gga_file = NULL;
+FILE* ins_file = NULL;
+FILE* ins_std_file = NULL;
+FILE* heading_file = NULL;
+FILE* gnsss_file = NULL;
+FILE* gnssposvel_file = NULL;
+FILE* gnssvel_file = NULL;
+FILE* ins_kml_file = NULL;
+FILE* gnss_kml_file = NULL;
+FILE* process_file = NULL;
+FILE* insconfig_file = NULL;
+
+extern void init() {
+	time_split_vec.clear();
+}
 
 static char aceinna_file_basename[256] = { 0 };
 extern void set_ins200_file_basename(char* input_name) {
@@ -35,17 +64,24 @@ extern void set_ins200_file_basename(char* input_name) {
 #endif
 }
 
-FILE* nmea_file = NULL;
-FILE* imu_file = NULL;
-FILE* ins_gga_file = NULL;
-FILE* ins_file = NULL;
-FILE* heading_file = NULL;
-FILE* gnsss_file = NULL;
-FILE* gnssposvel_file = NULL;
-FILE* gnssvel_file = NULL;
-FILE* ins_kml_file = NULL;
-FILE* gnss_kml_file = NULL;
-FILE* process_file = NULL;
+void create_file(FILE* &file, const char* suffix) {
+	if (strlen(aceinna_file_basename) == 0) return;
+	if (file == NULL) {
+		char file_name[256] = { 0 };
+		sprintf(file_name, "%s_%s", aceinna_file_basename, suffix);
+		file = fopen(file_name, "wb");
+	}
+}
+
+void create_split_file(FILE* &file, const char* file_path){
+	if (file == NULL) {
+		file = fopen(file_path, "wb");
+	}
+}
+
+extern void open_log_file() {
+	create_file(log_file, "_debug.log");
+}
 
 void write_nmea_file(char* str) {
 	if (nmea_file == NULL) {
@@ -69,6 +105,14 @@ void open_ins_file() {
 		char file_name[256] = { 0 };
 		sprintf(file_name, "%s_%s_ins.txt", aceinna_file_basename, FILE_NAME_FLAF);
 		ins_file = fopen(file_name, "w");
+	}
+}
+
+void open_ins_std_file() {
+	if (ins_std_file == NULL) {
+		char file_name[256] = { 0 };
+		sprintf(file_name, "%s_%s_ins_std.txt", aceinna_file_basename, FILE_NAME_FLAF);
+		ins_std_file = fopen(file_name, "w");
 	}
 }
 
@@ -112,6 +156,23 @@ void open_gnssvel_file() {
 	}
 }
 
+void open_insconfig_file() {
+	if (insconfig_file == NULL) {
+		char file_name[256] = { 0 };
+		sprintf(file_name, "%s_%s_insconfig.csv", aceinna_file_basename, FILE_NAME_FLAF);
+		insconfig_file = fopen(file_name, "w");
+		fprintf(insconfig_file, "ImuType,translation_X1,translation_Y1,translation_Z1,translation_X2,translation_Y2,translation_Z2,User_X,User_Y,User_X,rotation_Z,rotation_Y,rotation_Z\n");
+	}
+}
+FILE* rangecmp_file = NULL;
+void open_rangecmp_file() {
+	if (rangecmp_file == NULL) {
+		char file_name[256] = { 0 };
+		sprintf(file_name, "%s_%s_rangecmp.csv", aceinna_file_basename, FILE_NAME_FLAF);
+		rangecmp_file = fopen(file_name, "w");
+	}
+}
+
 #define HEADKML1 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
 #define HEADKML2 "<kml xmlns=\"http://www.opengis.net/kml/2.2\">\n"
 #define MARKICON "http://maps.google.com/mapfiles/kml/shapes/track.png"
@@ -123,7 +184,7 @@ void open_gnssvel_file() {
 void print_kml_header(FILE *kml_file) {
 	if (kml_file) {
 		const char* color[6] ={
-			"ffffffff","ff0000ff","ffff00ff","50FF78F0","ff00ff00","ff00aaff"
+			"ffffffff","ff0000ff","ffff00ff","ffff901e","ff00ff00","ff00aaff"
 		};//B-G-R °×É« SPP RTD UDR FIX FLOAT
 		int i;
 		fprintf(kml_file, HEADKML1);
@@ -178,8 +239,12 @@ void open_process_file() {
 	}
 }
 
+void write_ins_config();
+
 extern void close_ins2000_all_file()
 {
+	write_ins_config();
+	if (log_file)fclose(log_file); log_file = NULL;
 	if (nmea_file)fclose(nmea_file); nmea_file = NULL;
 	if (imu_file)fclose(imu_file); imu_file = NULL;
 	if (ins_gga_file)fclose(ins_gga_file); ins_gga_file = NULL;
@@ -189,6 +254,14 @@ extern void close_ins2000_all_file()
 	if (gnssvel_file)fclose(gnssvel_file); gnssvel_file = NULL;
 	if (ins_kml_file) { print_kml_end(ins_kml_file); fclose(ins_kml_file); } ins_kml_file = NULL;
 	if (gnss_kml_file) { print_kml_end(gnss_kml_file); fclose(gnss_kml_file); } gnss_kml_file = NULL;
+	if (insconfig_file)fclose(insconfig_file); insconfig_file = NULL;
+	for (int i = 0; i < time_split_vec.size(); i++) {
+		if (time_split_vec[i].split_file) {
+			fclose(time_split_vec[i].split_file); 
+			time_split_vec[i].split_file = NULL;
+		}
+	}
+	if(rangecmp_file)fclose(rangecmp_file); rangecmp_file = NULL;
 }
 
 uint32_t CRC32Value(int32_t i)
@@ -223,186 +296,6 @@ uint32_t CalculateBlockCRC32(
 	}
 	return(ulCRC);
 }
-
-#pragma pack(push, 1)
-
-typedef struct {
-	uint32_t buffer_len;
-	uint8_t buffer[MAX_BUFF_LEN];
-	uint8_t buffer_type; //1 BIN ,2 ASCII
-	uint8_t nmea_type; // index of nmea_headers
-}ins200_raw_t;
-
-typedef struct {
-	uint32_t header_len;
-	uint16_t message_id;
-	uint8_t message_type;
-	uint8_t port_address;
-	uint16_t message_len;
-	uint16_t sequence;
-	uint8_t idle_time;
-	uint8_t time_status;
-	uint16_t week;
-	uint32_t gps_ms;
-	double gps_seconds;
-	uint32_t receiver_status;
-	uint16_t bds_gps_time_offset;
-	uint16_t receiver_sw_version;
-}ins200_header_t;
-
-typedef struct {
-	uint32_t week;
-	double seconds;
-	double roll;
-	double pitch;
-	double azimuth;
-	uint32_t status;
-}insatt_t;
-
-typedef struct {
-	uint32_t week;
-	double seconds;
-	double latitude;
-	double longitude;
-	double height;
-	double north_velocity;
-	double east_velocity;
-	double up_velocity;
-	double roll;
-	double pitch;
-	double azimuth;
-	uint32_t status;
-}inspva_t;
-
-typedef struct {
-	uint32_t ins_status;
-	uint32_t position_type;
-	double latitude;
-	double longitude;
-	double altitude;
-	float undulation;
-	double north_velocity;
-	double east_velocity;
-	double up_velocity;
-	double roll;
-	double pitch;
-	double azimuth;
-	float latitude_std;
-	float longitude_std;
-	float altitude_std;
-	float north_velocity_std;
-	float east_velocity_std;
-	float up_velocity_std;
-	float roll_std;
-	float pitch_std;
-	float azimuth_std;
-	uint32_t ext_sol_stat;
-	uint16_t seconds_since_update;
-}inspvax_t;
-
-typedef struct {
-	int32_t solution_status;
-	int32_t position_type;
-	float length;					//Baseline length (m)
-	float heading;					//Heading in degrees [0,360)
-	float pitch;					//Pitch in degrees +- 90
-	float reserved;
-	float hdgstddev;
-	float ptchstddev;
-	char stnid[4];
-	uint8_t SVs;
-	uint8_t solnSVs;
-	uint8_t obs;
-	uint8_t multi;
-	uint8_t reserved_2;
-	uint8_t ext_sol_stat;
-	uint8_t reserved_3;
-	uint8_t sig_mask;
-}heading_t;
-
-typedef struct {
-	int32_t solution_status;
-	int32_t position_type;
-	float length;				   //Baseline length (m)
-	float heading;                 //Heading in degrees [0,360)
-	float pitch;                   //Pitch in degrees +- 90
-	float reserved;
-	float hdgstddev;
-	float ptchstddev;
-	char rover_stnid[4];
-	char baser_stnid[4];
-	uint8_t SVs;
-	uint8_t solnSVs;
-	uint8_t obs;
-	uint8_t multi;
-	uint8_t reserved_2;
-	uint8_t ext_sol_stat;
-	uint8_t reserved_3;
-	uint8_t sig_mask;
-}heading2_t;
-
-typedef struct {
-	uint32_t week;
-	double seconds;
-	uint32_t imu_status;
-	int32_t z_accel;
-	int32_t y_accel;
-	int32_t x_accel;
-	int32_t z_gyro;
-	int32_t y_gyro;
-	int32_t x_gyro;
-} rawimu_t;
-
-typedef struct {
-	int8_t imuinfo;
-	int8_t imutype;
-	uint16_t week;
-	double seconds;
-	uint32_t imu_status;
-	int32_t z_accel;
-	int32_t y_accel;
-	int32_t x_accel;
-	int32_t z_gyro;
-	int32_t y_gyro;
-	int32_t x_gyro;
-} rawimusx_t;
-
-typedef struct {
-	int32_t solution_status;
-	int32_t position_type;
-	double lat;
-	double lon;
-	double hgt;
-	float undulation;
-	uint32_t datum_id;
-	float lat_sigma;       //Latitude standard deviation (metres)
-	float lon_sigma;      //Longitude standard deviation (metres)
-	float height_sigma;       //Height standard deviation (metres)
-	char stn_id[4];
-	float diff_age;
-	float sol_age;
-	uint8_t SVs;
-	uint8_t solnSVs;
-	uint8_t reserved_1;
-	uint8_t reserved_2;
-	uint8_t reserved_3;
-	uint8_t ext_sol_stat;
-	uint8_t reserved_4;
-	uint8_t sig_mask;
-}bestgnsspos_t;
-
-typedef struct {
-	int32_t sol_status;
-	int32_t vel_type;
-	float latency;
-	float age;
-	double hor_spd;
-	double trk_gnd;
-	double vert_spd;
-	float reserved;
-}bestvel_t,bestgnssvel_t;
-
-#pragma pack(pop)
 
 #define ACEINNA_GYRO   (0.005/64)  //
 #define ACEINNA_ACC    (0.005*9.80665/4000)  //
@@ -447,6 +340,7 @@ double rates[RATES_SIZE][4] = {
 	{58,100,P2_33_DEG,P2_29},
 };
 static int readcount = 0;
+static int msg_num = 0;
 const uint8_t sync_header_1[SYNC_HEADER_LEN] = { 0xAA, 0x44, 0x12 };
 const uint8_t sync_header_2[SYNC_HEADER_LEN] = { 0xAA, 0x44, 0x13 };
 const char* nmea_headers[NEMA_TYPES_NUM] = { "$GNGGA", "$GPGGA", "$GPGSA", "$GPGST", "$GPGSV", "$GPHDT", "$GPRMC", "$GPVTG", "$GPZDA" };
@@ -457,6 +351,30 @@ static uint8_t limit_buffer[LIMIT_BUFF_LEN] = { 0 };
 static char output_buffer[MAX_BUFF_LEN] = { 0 };
 bestgnsspos_t bestgnsspos = { 0 };
 bestgnssvel_t bestgnssvel = { 0 };
+
+std::map<int, std::string> imu_types = { 
+	{ 0, "UNKNOWN" 			 },
+	{ 1, "HG1700_AG11"		 },
+	{ 4, "HG1700_AG17"		 },
+	{ 5, "HG1900_CA29"		 },
+	{ 8, "LN200 Northrop"	 },
+	{11, "HG1700_AG58"		 },
+	{12, "HG1700_AG62"		 },
+	{13, "IMAR_FSAS"		 },
+	{16, "KVH_COTS"			 },
+	{20, "HG1930_AA99"		 },
+	{26, "ISA100C"			 },
+	{27, "HG1900_CA50"		 },
+	{28, "HG1930_CA50"		 },
+	{31, "ADIS16488"		 },
+	{32, "STIM300"			 },
+	{33, "KVH_1750"			 },
+	{41, "EPSON_G320"		 },
+	{52, "LITEF_MICROIMU"	 },
+	{56, "STIM300D"			 },
+	{58, "HG4930_AN01"		 },
+	{62, "EPSON_G320_200HZ"	 }
+};
 
 static void push_limit_buffer(uint8_t c) {
 	if (limit_buffer_index >= LIMIT_BUFF_LEN) {
@@ -533,10 +451,10 @@ typedef  struct EarthParameter
 } EarthParameter;
 const  EarthParameter WGS84 = { 6378137.0, 6356752.3142, 0.0033528106643315515,0.081819190837555025,0.0066943799893122479 ,  7.2922115147e-5,398600441800000.00 };
 
-typedef struct {        /* time struct */
-	time_t time;        /* time (s) expressed by standard time_t */
-	double sec;         /* fraction of second under 1 s */
-} gtime_t;
+//typedef struct {        /* time struct */
+//	time_t time;        /* time (s) expressed by standard time_t */
+//	double sec;         /* fraction of second under 1 s */
+//} gtime_t;
 
 uint8_t UpdateMN(const double *BLH, double *M, double *N)
 {
@@ -548,7 +466,7 @@ uint8_t UpdateMN(const double *BLH, double *M, double *N)
 	return 1;
 };
 
-int32_t getpostype(int position_type)
+int32_t get_pos_type(int position_type)
 {
 	int32_t ret = 0;
 	switch (position_type)
@@ -582,7 +500,7 @@ int32_t getpostype(int position_type)
 		ret = 4;
 		break;
 	case 55:
-		//fix;
+		//float;
 		ret = 5;
 		break;
 	case 34:
@@ -593,6 +511,19 @@ int32_t getpostype(int position_type)
 		break;
 	}
 	return ret;
+}
+
+int32_t get_ins_status(int ins_status)
+{
+	if (ins_status <= 3) {
+		return ins_status;
+	}
+	else if(ins_status <= 7) {
+		return ins_status - 2;
+	}
+	else {
+		return ins_status;
+	}
 }
 
 static void deg2dms(double deg, double* dms)
@@ -634,84 +565,6 @@ static int outnmea_gga(unsigned char* buff, double time, int type, double* blh, 
 	return p - (char*)buff;
 }
 
-static gtime_t epoch2time(const double *ep)
-{
-	const int doy[] = { 1,32,60,91,121,152,182,213,244,274,305,335 };
-	gtime_t time = { 0 };
-	int days, sec, year = (int)ep[0], mon = (int)ep[1], day = (int)ep[2];
-
-	if (year < 1970 || 2099 < year || mon < 1 || 12 < mon) return time;
-
-	/* leap year if year%4==0 in 1901-2099 */
-	days = (year - 1970) * 365 + (year - 1969) / 4 + doy[mon - 1] + day - 2 + (year % 4 == 0 && mon >= 3 ? 1 : 0);
-	sec = (int)floor(ep[5]);
-	time.time = (time_t)days * 86400 + (int)ep[3] * 3600 + (int)ep[4] * 60 + sec;
-	time.sec = ep[5] - sec;
-	return time;
-}
-
-static gtime_t gpst2time(int week, double sec)
-{
-	const static double gpst0[] = { 1980,1,6,0,0,0 }; /* gps time reference */
-	gtime_t t = epoch2time(gpst0);
-	if (sec < -1E9 || 1E9 < sec) sec = 0.0;
-	t.time += 86400 * 7 * week + (int)sec;
-	t.sec = sec - (int)sec;
-	return t;
-}
-static  gtime_t timeadd(gtime_t t, double sec)
-{
-	double tt;
-	t.sec += sec; tt = floor(t.sec); t.time += (int)tt; t.sec -= tt;
-	return t;
-}
-static gtime_t gpst2utc(gtime_t t)
-{
-	gtime_t tu;
-#define MAXLEAPS    64                  /* max number of leap seconds table */
-	static double leaps[MAXLEAPS + 1][7] = { /* leap seconds (y,m,d,h,m,s,utc-gpst) */
-	{2017,1,1,0,0,0,-18},
-	{2015,7,1,0,0,0,-17},
-	{2012,7,1,0,0,0,-16},
-	{2009,1,1,0,0,0,-15},
-	{2006,1,1,0,0,0,-14},
-	{1999,1,1,0,0,0,-13},
-	{1997,7,1,0,0,0,-12},
-	{1996,1,1,0,0,0,-11},
-	{1994,7,1,0,0,0,-10},
-	{1993,7,1,0,0,0, -9},
-	{1992,7,1,0,0,0, -8},
-	{1991,1,1,0,0,0, -7},
-	{1990,1,1,0,0,0, -6},
-	{1988,1,1,0,0,0, -5},
-	{1985,7,1,0,0,0, -4},
-	{1983,7,1,0,0,0, -3},
-	{1982,7,1,0,0,0, -2},
-	{1981,7,1,0,0,0, -1},
-	{0}
-	};
-	tu = timeadd(t, leaps[0][6]);
-	return tu;
-}
-
-static void time2epoch(gtime_t t, double *ep)
-{
-	const int mday[] = { /* # of days in a month */
-		31,28,31,30,31,30,31,31,30,31,30,31,31,28,31,30,31,30,31,31,30,31,30,31,
-		31,29,31,30,31,30,31,31,30,31,30,31,31,28,31,30,31,30,31,31,30,31,30,31
-	};
-	int days, sec, mon, day;
-
-	/* leap year if year%4==0 in 1901-2099 */
-	days = (int)(t.time / 86400);
-	sec = (int)(t.time - (time_t)days * 86400);
-	for (day = days % 1461, mon = 0; mon < 48; mon++) {
-		if (day >= mday[mon]) day -= mday[mon]; else break;
-	}
-	ep[0] = 1970 + days / 1461 * 4 + mon / 12; ep[1] = mon % 12 + 1; ep[2] = day + 1;
-	ep[3] = sec / 3600; ep[4] = sec % 3600 / 60; ep[5] = sec % 60 + t.sec;
-}
-
 void print_ins_gga_file(const inspvax_t* msg) {
 	if (fabs(msg->latitude) > 0.001
 		&& (msg->ins_status == 3 || msg->ins_status == 6 || msg->ins_status == 7)) {
@@ -738,7 +591,7 @@ void print_ins_gga_file(const inspvax_t* msg) {
 		d_leverarm[1] = leverarm_n[1] / ((N + pos[2])*cos(pos[0]));
 		d_leverarm[2] = -leverarm_n[2];
 		MatrixAdd(pos, d_leverarm, 3, 1, pos);
-		type = getpostype(msg->position_type);
+		type = get_pos_type(msg->position_type);
 		len = outnmea_gga(ggaBuffer, header.gps_seconds, type, pos, 10, 1.0, 1.0);
 		open_ins_gga_file();
 		if (ins_gga_file) fprintf(ins_gga_file, "%s", ggaBuffer);
@@ -751,6 +604,27 @@ void print_ins_file(const inspvax_t* msg) {
 	open_ins_file();
 	if (ins_file) fprintf(ins_file, output_buffer);
 	if (process_file) fprintf(process_file, "$GPINS,%s", output_buffer);
+}
+
+void print_ins_std_file(const inspvax_t* msg) {
+	sprintf(output_buffer, 
+		"%4d,%10.4f,%3d,%3d"
+		",%14.9f,%14.9f,%10.4f"
+		",%10.4f,%10.4f,%10.4f"
+		",%10.4f,%10.4f,%10.4f"
+		",%8.3f,%8.3f,%8.3f"
+		",%8.3f,%8.3f,%8.3f"
+		",%8.3f,%8.3f,%8.3f\n"
+	, header.week, header.gps_seconds
+	, get_ins_status(msg->ins_status), get_pos_type(msg->position_type)
+	, msg->latitude, msg->longitude, msg->altitude + msg->undulation
+	, msg->north_velocity, msg->east_velocity, msg->up_velocity
+	, msg->roll, msg->pitch, msg->azimuth
+	, msg->latitude_std, msg->longitude_std, msg->altitude_std
+	, msg->north_velocity_std, msg->east_velocity_std, msg->up_velocity_std
+	, msg->roll_std, msg->pitch_std, msg->azimuth_std);
+	open_ins_std_file();
+	if (ins_std_file) fprintf(ins_std_file, output_buffer);
 }
 
 #define INS_KML_OUTPUT_DATARATE (1.0)
@@ -808,6 +682,7 @@ void print_ins_kml(const inspvax_t* msg) {
 void print_inspvax_file(const inspvax_t* msg) {
 	print_ins_gga_file(msg);
 	print_ins_file(msg);
+	print_ins_std_file(msg);
 	print_ins_kml(msg);
 }
 
@@ -856,7 +731,7 @@ void print_imu_file(const rawimusx_t* msg) {
 }
 
 void print_bestgnsspos_file(const bestgnsspos_t* msg) {
-	int type = getpostype(msg->position_type);
+	int type = get_pos_type(msg->position_type);
 	if (msg->solution_status != 0)
 	{
 		type = 0;
@@ -884,7 +759,7 @@ void print_bestgnssvel_file(const bestgnssvel_t* msg) {
 
 void print_gnssposvel_file(const bestgnssvel_t* vel, const bestgnsspos_t* pos) {
 	if (fabs(pos->lat) > 0.001) {
-		int type = getpostype(pos->position_type);
+		int type = get_pos_type(pos->position_type);
 		double north_velocity = vel->hor_spd * cos(vel->trk_gnd * PI / 180);
 		double east_velocity = vel->hor_spd * sin(vel->trk_gnd * PI / 180);
 		double up_velocity = vel->vert_spd;
@@ -909,7 +784,7 @@ void print_gnss_kml(const bestgnssvel_t* vel, const bestgnsspos_t* pos) {
 		north_velocity = vel->hor_spd * cos(vel->trk_gnd * PI / 180);
 		east_velocity = vel->hor_spd * sin(vel->trk_gnd * PI / 180);
 		up_velocity = vel->vert_spd;
-		pcolor = getpostype(pos->position_type);
+		pcolor = get_pos_type(pos->position_type);
 		fprintf(gnss_kml_file, "<Placemark>\n");
 		fprintf(gnss_kml_file, "<TimeStamp><when>%04d-%02d-%02dT%02d:%02d:%05.2fZ</when></TimeStamp>\n", (int32_t)ep[0], (int32_t)ep[1], (int32_t)ep[2], (int32_t)ep[3], (int32_t)ep[4], ep[5]);
 		//=== description start ===
@@ -939,6 +814,269 @@ void print_gnss_kml(const bestgnssvel_t* vel, const bestgnsspos_t* pos) {
 		fprintf(gnss_kml_file, "<coordinates>%13.9f,%12.9f,%5.3f</coordinates>\n", pos->lon, pos->lat, pos->hgt + pos->undulation);
 		fprintf(gnss_kml_file, "</Point>\n");
 		fprintf(gnss_kml_file, "</Placemark>\n");
+	}
+}
+
+void print_insconfig(insconfig_t& config) 
+{
+	if (insconfig_file == NULL) return;
+	fprintf(insconfig_file,"insconfig_t: \n\
+ImuType = %d \n\
+Mapping = %d \n\
+InitialAlignmentVelocity = %d \n\
+HeaveWindow, = %d \n\
+Profile = %d \n\
+EnabledUpdates = %d \n\
+AlignmentMode = %d \n\
+RelativeINSOutputFrame = %d \n\
+RelativeINSOutputDirection = %d \n\
+INSReceiverStatus = %d \n\
+INSSeedEnabled = %d \n\
+INSSeedValidation = %d \n",
+config.ImuType,
+config.Mapping,
+config.InitialAlignmentVelocity,
+config.HeaveWindow,
+config.Profile,
+config.EnabledUpdates,
+config.AlignmentMode,
+config.RelativeINSOutputFrame,
+config.RelativeINSOutputDirection,
+config.INSReceiverStatus,
+config.INSSeedEnabled,
+config.INSSeedValidation);
+	fprintf(insconfig_file,"\n");
+}
+
+void print_translation(insconfig_translation_t& config) 
+{
+	if (insconfig_file == NULL) return;
+	fprintf(insconfig_file, "insconfig_translation_t: \n\
+Translation = %d \n\
+Frame = %d \n\
+X_Offset = %f \n\
+Y_Offset = %f \n\
+Z_Offset = %f \n\
+X_Uncertainty = %f \n\
+Y_Uncertainty = %f \n\
+Z_Uncertainty = %f \n\
+TranslationSource = %d \n",
+config.Translation,
+config.Frame,
+config.X_Offset,
+config.Y_Offset,
+config.Z_Offset,
+config.X_Uncertainty,
+config.Y_Uncertainty,
+config.Z_Uncertainty,
+config.TranslationSource);
+	fprintf(insconfig_file, "\n");
+}
+
+void print_rotation(insconfig_rotation_t& config)
+{
+	if (insconfig_file == NULL) return;
+	fprintf(insconfig_file, "insconfig_rotation_t: \n\
+Rotation = %d \n\
+Frame = %d \n\
+X_Rotation = %f \n\
+Y_Rotation = %f \n\
+Z_Rotation = %f \n\
+X_RotationStdDev = %f \n\
+Y_RotationStdDev = %f \n\
+Z_RotationStdDev = %f \n\
+RotationSource = %d \n",
+config.Rotation,
+config.Frame,
+config.X_Rotation,
+config.Y_Rotation,
+config.Z_Rotation,
+config.X_RotationStdDev,
+config.Y_RotationStdDev,
+config.Z_RotationStdDev,
+config.RotationSource);
+	fprintf(insconfig_file, "\n");
+}
+
+void write_ins_config() {
+	if (!insconfig_file)return;
+	fprintf(insconfig_file, "%s, %11.6f,%11.6f,%11.6f, %11.6f,%11.6f,%11.6f, %11.6f,%11.6f,%11.6f, %11.6f,%11.6f,%11.6f\n", imu_types[ins_config.ImuType].c_str(), translations[0].X_Offset, translations[0].Y_Offset, translations[0].Z_Offset,
+		translations[1].X_Offset, translations[1].Y_Offset, translations[1].Z_Offset,
+		translations[2].X_Offset, translations[2].Y_Offset, translations[2].Z_Offset,
+		rotations[0].X_Rotation, rotations[0].Y_Rotation, rotations[0].Z_Rotation);
+}
+
+/* extract unsigned/signed bits ------------------------------------------------
+* extract unsigned/signed bits from byte data
+* args   : unsigned char *buff I byte data
+*          int    pos    I      bit position from start of data (bits)
+*          int    len    I      bit length (bits) (len<=32)
+* return : extracted unsigned/signed bits
+*-----------------------------------------------------------------------------*/
+uint32_t getbitu32(const unsigned char* buff, int pos, int len)
+{
+	uint32_t bits = 0;
+	int i;
+	for (i = pos; i < pos + len; i++)
+	{
+		bits = (bits << 1) + ((buff[i / 8] >> (7 - i % 8)) & 1u);
+	}
+	return bits;
+}
+int32_t getbits32(const unsigned char* buff, int pos, int len)
+{
+	uint32_t bits = getbitu32(buff, pos, len);
+	if (len <= 0 || 32 <= len || !(bits & (1u << (len - 1))))
+	{
+		return (int32_t)bits;
+	}
+	return (int32_t)(bits | (~0u << len)); /* extend sign */
+}
+uint64_t getbitu64(const unsigned char* buff, int pos, int len)
+{
+	uint64_t bits = 0;
+	int i;
+	for (i = pos; i < pos + len; i++)
+	{
+		bits = (bits << 1) + ((buff[i / 8] >> (7 - i % 8)) & 1u);
+	}
+	return bits;
+}
+int64_t getbits64(const unsigned char* buff, int pos, int len)
+{
+	uint64_t bits = getbitu64(buff, pos, len);
+	if (len <= 0 || 64 <= len || !(bits & (1u << (len - 1))))
+	{
+		return (int64_t)bits;
+	}
+	return (int64_t)(bits | (~0u << len)); /* extend sign */
+}
+float get_StdDev_PSR_Value(uint32_t StdDev_PSR)
+{
+	switch (StdDev_PSR) {
+		case 0:return 0.050;
+		case 1:return 0.075;
+		case 2:return 0.113;
+		case 3:return 0.169;
+		case 4:return 0.253;
+		case 5:return 0.380;
+		case 6:return 0.570;
+		case 7:return 0.854;
+		case 8:return 1.281;
+		case 9:return 2.375;
+		case 10:return 4.750;
+		case 11:return 9.500;
+		case 12:return 19.000;
+		case 13:return 38.000;
+		case 14:return 76.000;
+		case 15:return 152.000;
+	}
+	return 0;
+}
+char get_sys(uint8_t Satellite_system) {
+	//0 = GPS
+	//1 = GLONASS
+	//2 = SBAS
+	//3 = Galileo
+	//4 = BeiDou
+	//5 = QZSS
+	//6 = NavIC
+	//7 = Other
+	switch (Satellite_system)
+	{
+	case 0:
+		return 'G'; //GPS
+	case 1:
+		return 'R'; //GLONASS
+	case 2:
+		return 'S'; //SBAS
+	case 3:
+		return 'E'; //Galileo
+	case 4:
+		return 'C'; //BeiDou
+	case 5:
+		return 'J'; //QZSS
+	case 6:
+		return 'I'; //NavIC
+	case 7:
+		return 'O'; //Other
+	default:
+		return '-';
+	}
+}
+#define OBS_LEN  (24)
+/* get fields (little-endian) ------------------------------------------------*/
+#define U1(p) (*((unsigned char *)(p)))
+#define I1(p) (*((signed char *)(p)))
+static unsigned short U2(unsigned char *p) { unsigned short u; memcpy(&u, p, 2); return u; }
+static unsigned int   U4(unsigned char *p) { unsigned int   u; memcpy(&u, p, 4); return u; }
+static int            I4(unsigned char *p) { int            i; memcpy(&i, p, 4); return i; }
+static float          R4(unsigned char *p) { float          r; memcpy(&r, p, 4); return r; }
+static double         R8(unsigned char *p) { double         r; memcpy(&r, p, 8); return r; }
+/* extend sign ---------------------------------------------------------------*/
+static int exsign(unsigned int v, int bits)
+{
+	return (int)(v&(1 << (bits - 1)) ? v | (~0u << bits) : v);
+}
+void decode_rangecmp_obs(uint8_t* obs_buff) {
+	uint32_t Channel_Tracking_Status = 0;
+	memcpy(&Channel_Tracking_Status, obs_buff, 4);
+	uint8_t Tracking_state = Channel_Tracking_Status & 0x1F;
+	uint8_t SV_channel_number = (Channel_Tracking_Status>>5) & 0x1F;
+	uint8_t Phase_lock_flag = (Channel_Tracking_Status >> 10) & 0x01;
+	uint8_t Parity_known_flag = (Channel_Tracking_Status >> 11) & 0x01;
+	uint8_t Code_locked_flag = (Channel_Tracking_Status >> 12) & 0x01;
+	uint8_t Correlator_type = (Channel_Tracking_Status >> 13) & 0x07;
+	uint8_t Satellite_system = (Channel_Tracking_Status >> 16) & 0x07;
+	uint8_t Grouping = (Channel_Tracking_Status >> 20) & 0x01;
+	uint8_t Signal_type = (Channel_Tracking_Status >> 21) & 0x1F;
+	uint8_t Primary_L1_channel = (Channel_Tracking_Status >> 27) & 0x1;
+	uint8_t Carrier_phase = (Channel_Tracking_Status >> 28) & 0x1;
+	uint8_t Digital_filtering = (Channel_Tracking_Status >> 29) & 0x1;
+	uint8_t PRN_lock_flag = (Channel_Tracking_Status >> 30) & 0x1;
+	uint8_t Channel_assignment = (Channel_Tracking_Status >> 31) & 0x1;
+	if (rangecmp_file) {
+		fprintf(rangecmp_file, "%2d,%2d,%d,%d,%d,%d,%c,%d,%2d,%d,%d,%d,%d,%d,\n"
+			, Tracking_state,SV_channel_number, Phase_lock_flag, Parity_known_flag, Code_locked_flag
+			, Correlator_type, get_sys(Satellite_system), Grouping, Signal_type
+			, Primary_L1_channel, Carrier_phase, Digital_filtering, PRN_lock_flag, Channel_assignment);
+	}
+
+	float f_Doppler_Frequency = exsign(U4(obs_buff + 4) & 0xFFFFFFF, 28) / 256.0;
+	double f_Pseudorange = (U4(obs_buff + 7) >> 4) / 128.0 + U1(obs_buff + 11)*2097152.0;
+	float f_ADR = I4(obs_buff + 12) / 256.0;
+
+	int32_t  ADR = getbits32(obs_buff, 96, 32);
+	uint32_t StdDev_PSR = getbitu32(obs_buff, 128, 4);
+	uint32_t StdDev_ADR = getbitu32(obs_buff, 132, 4);
+	uint32_t PRN = getbitu32(obs_buff, 136, 8);
+	float f_Lock_Time = (U4(obs_buff + 18) & 0x1FFFFF) / 32.0; /* lock time */
+	uint32_t C_No = getbitu32(obs_buff, 165, 5);
+	uint32_t GLONASS_Frequency_number = getbitu32(obs_buff, 170, 5);
+
+	float f_StdDev_PSR = get_StdDev_PSR_Value(StdDev_ADR);
+	float f_StdDev_ADR = float(StdDev_PSR + 1) / 512;
+	C_No += 20;
+	fprintf(rangecmp_file, "%f,%f,%f,%.3f,%.3f,%d,%f,%d,%d\n", f_Doppler_Frequency, f_Pseudorange, f_ADR, f_StdDev_PSR, f_StdDev_ADR, PRN, f_Lock_Time, C_No, GLONASS_Frequency_number);
+}
+void decode_rangecmp()
+{
+	open_rangecmp_file();
+	if (rangecmp_file) {
+		int number = 0;
+		memcpy(&number, raw.buffer + header.header_len, sizeof(int));
+		fprintf(rangecmp_file, "%4d,%10.4f,%d\n", header.week, header.gps_seconds, number);
+		uint8_t obs_buff[OBS_LEN] = { 0 };
+		int offset = header.header_len + sizeof(number);
+		for (int i = 0; i < number; i++) {
+			memcpy(obs_buff, raw.buffer + offset, OBS_LEN);
+			for (int j = 0; j < OBS_LEN; j++) {
+				fprintf(rangecmp_file, "%02x", obs_buff[j]);
+			}
+			fprintf(rangecmp_file, "\n");
+			decode_rangecmp_obs(obs_buff);
+			offset += OBS_LEN;
+		}
 	}
 }
 
@@ -1014,9 +1152,13 @@ void decode_message() {
 	case 174: {}break;
 	case 47: {}break;
 	case 100: {}break;
-	case 43: {}break;
+	case 43: {
+		printf("43\n");
+	}break;
 	case 6005: {}break;
-	case 140: {}break;
+	case 140: {
+		decode_rangecmp();
+	}break;
 	case 268: {
 		rawimu_t msg = { 0 };
 //		printf("%d %d/%d OK\n", header.message_id, sizeof(rawimu_t), header.message_len);
@@ -1039,8 +1181,54 @@ void decode_message() {
 	case 216: {}break;
 	case 101: {}break;
 	case 37: {}break;
+	case 1945:
+	{
+		//if (insconfig_file) break;
+		open_insconfig_file();
+		uint8_t* cur = raw.buffer + header.header_len;
+		memcpy(&ins_config, cur, sizeof(insconfig_t)); cur += sizeof(insconfig_t);
+		//print_insconfig(msg);
+		uint32_t NumberofTranslations = 0;
+		memcpy(&NumberofTranslations, cur, sizeof(uint32_t)); cur += sizeof(uint32_t);
+		if (NumberofTranslations > 0) {
+			for (int i = 0; i < NumberofTranslations; i++) {
+				if (i < 3) {
+					memcpy(&translations[i], cur, sizeof(insconfig_translation_t));
+				}
+				cur += sizeof(insconfig_translation_t);
+			}
+		}
+		uint32_t NumberofRotations = 0;
+		memcpy(&NumberofRotations, cur, sizeof(uint32_t)); cur += sizeof(uint32_t);
+		if (NumberofRotations > 0) {
+			for (int i = 0; i < NumberofRotations; i++) {
+				if (i < 2) {
+					memcpy(&rotations[i], cur, sizeof(insconfig_rotation_t)); 
+				}
+				cur += sizeof(insconfig_rotation_t);
+			}
+		}
+		uint32_t read_size = cur - (raw.buffer + header.header_len);
+		//printf("%d, message_len = %d, insconfig_t = %d, NumberofTranslations = %d, NumberofRotations = %d, read_size = %d \n", header.message_id, header.message_len, sizeof(insconfig_t), NumberofTranslations, NumberofRotations, read_size);
+	}
+	break;
 	default:
 		break;
+	}
+}
+
+void split_bin_file() {
+	if (time_split_vec.size() > 0) {
+		gtime_t time_stamp = gpst2time(header.week, header.gps_seconds);
+		for (int i = 0; i < time_split_vec.size(); i++) {
+			time_split_t& time_split = time_split_vec[i];
+			if ((i == 0 || time_split.start_time <= time_stamp.time) &&
+				(time_stamp.time <= time_split.end_time + 1 || i == time_split_vec.size() - 1)) {
+				create_split_file(time_split.split_file, time_split.file_name);
+				fwrite(raw.buffer, 1, raw.buffer_len, time_split.split_file);
+				break;
+			}
+		}
 	}
 }
 
@@ -1081,9 +1269,14 @@ void decode_ins2000_bin() {
 			if (raw.buffer_len == header.header_len + header.message_len + CRC_LEN) {
 				uint32_t cal_crc = CalculateBlockCRC32(raw.buffer_len - CRC_LEN, raw.buffer);
 				uint32_t read_crc = 0;
-				memcpy(&read_crc, &raw.buffer[raw.buffer_len - CRC_LEN], 4);
+				memcpy(&read_crc, &raw.buffer[raw.buffer_len - CRC_LEN], CRC_LEN);
 				if (read_crc == cal_crc) {
+					split_bin_file();
 					decode_message();
+					if (log_file) {
+						fprintf(log_file, "%4d,%10.4f,  %04d,%5d,%5d,%8d\n", header.week, header.gps_seconds, header.message_id, raw.buffer_len, readcount, ++msg_num);
+					}
+					readcount = 0;
 					//printf("%04d %03d %d\n", header.message_id, raw.buffer_len, readcount);
 				}
 				else {
@@ -1099,7 +1292,7 @@ void decode_ins2000_bin() {
 void decode_ins2000_nmea() {
 	if (raw.buffer[raw.buffer_len - 1] == '\n' && raw.buffer[raw.buffer_len - 2] == '\r') {
 		raw.buffer[raw.buffer_len] = '\0';
-		write_nmea_file(raw.buffer);
+		write_nmea_file((char*)raw.buffer);
 		memset(&raw, 0, sizeof(raw));
 		memset(&header, 0, sizeof(header));
 	}
@@ -1145,5 +1338,30 @@ extern void input_ins2000_raw(uint8_t c) {
 			memset(&raw, 0, sizeof(raw));
 			memset(&header, 0, sizeof(header));
 		}
+	}
+}
+
+void split(const string& s, vector<string>& tokens, const string& delim = " ") {
+	tokens.clear();
+	size_t lastPos = s.find_first_not_of(delim, 0);
+	size_t pos = s.find(delim, lastPos);
+	while (lastPos != string::npos) {
+		tokens.emplace_back(s.substr(lastPos, pos - lastPos));
+		lastPos = s.find_first_not_of(delim, pos);
+		pos = s.find(delim, lastPos);
+	}
+}
+
+void append_split_config(char * line)
+{
+	time_split_t split_time = { 0 };
+	vector<string> tokens;
+	split(line, tokens, ",");
+	if (tokens.size() >= 4) {
+		split_time.split_id = atoi(tokens[0].c_str());
+		split_time.start_time = atoi(tokens[1].c_str());
+		split_time.end_time = atoi(tokens[2].c_str());
+		strcpy(split_time.file_name,tokens[3].c_str());
+		time_split_vec.push_back(split_time);
 	}
 }

@@ -15,15 +15,21 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.c">
+    <ClCompile Include="ins2000.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="ins2000.c">
+    <ClCompile Include="main.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="time_conversion.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ins2000.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="time_conversion.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
